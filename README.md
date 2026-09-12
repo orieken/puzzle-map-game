@@ -16,6 +16,10 @@ A Vue 3 and Tailwind tabletop companion for a Dungeon Master running a shared, t
 
 ![Maze of Whispers Dungeon Master dashboard](./docs/images/maze-of-whispers-dm-dashboard.png)
 
+### Player view
+
+![Maze of Whispers player view](./docs/images/maze-of-whispers-player-view.png)
+
 ## Current prototype
 
 The browser prototype includes:

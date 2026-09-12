@@ -83,6 +83,8 @@ Copy each value from **Project settings → General → Your apps → SDK setup 
 
 Vite embeds variables beginning with `VITE_` into the browser bundle. Do not use this prefix for private server credentials.
 
+Firebase web configuration identifies the Firebase project but does not authorize access to its data. Because these values must appear in the browser bundle, `netlify.toml` excludes the six public `VITE_FIREBASE_*` keys from Netlify's environment-variable secrets scan. All other secret scanning remains enabled. Keep Firestore Security Rules deployed, and verify that the Firebase browser API key is restricted to Firebase-related APIs.
+
 ## 8. Recommended Firestore structure
 
 ```text

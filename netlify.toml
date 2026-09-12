@@ -4,6 +4,9 @@
 
 [build.environment]
   NODE_VERSION = "22"
+  # Firebase web configuration is public by design and Vite embeds it in the
+  # browser bundle. Exclude only these keys while retaining all other scans.
+  SECRETS_SCAN_OMIT_KEYS = "VITE_FIREBASE_API_KEY,VITE_FIREBASE_AUTH_DOMAIN,VITE_FIREBASE_PROJECT_ID,VITE_FIREBASE_STORAGE_BUCKET,VITE_FIREBASE_MESSAGING_SENDER_ID,VITE_FIREBASE_APP_ID"
 
 [[redirects]]
   from = "/*"

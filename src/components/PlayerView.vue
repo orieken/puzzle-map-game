@@ -41,6 +41,7 @@ const visibleAhead = computed(() => {
 })
 
 const threat = computed(() => {
+  if (props.session.playerThreat) return props.session.playerThreat
   const path = shortestPath(props.session.maze, props.player.position, props.session.abomination.position)
   const distance = Math.max(0, path.length - 1)
   if (!path.length || distance > 8) return { distance, label: 'Silence', level: 'safe', direction: null }

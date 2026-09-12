@@ -2,7 +2,10 @@
 import { ref } from 'vue'
 import { ArrowRight, Dices, Plus, Shield, Trash2, Users } from 'lucide-vue-next'
 
-defineProps({ joinError: { type: String, default: '' } })
+defineProps({
+  joinError: { type: String, default: '' },
+  busy: { type: Boolean, default: false },
+})
 const emit = defineEmits(['create', 'join'])
 
 const dmName = ref('The Keeper')
@@ -93,8 +96,8 @@ function create() {
           </form>
         </div>
 
-        <button type="button" class="button-primary mt-6 w-full" :disabled="partyNames.length === 0" @click="create">
-          Generate the maze <ArrowRight class="h-4 w-4" />
+        <button type="button" class="button-primary mt-6 w-full" :disabled="partyNames.length === 0 || busy" @click="create">
+          {{ busy ? 'Opening the way…' : 'Generate the maze' }} <ArrowRight v-if="!busy" class="h-4 w-4" />
         </button>
 
         <div class="my-6 flex items-center gap-3 text-[10px] uppercase tracking-[0.2em] text-fog/50">
@@ -104,10 +107,10 @@ function create() {
         <form class="grid grid-cols-[1fr_1fr_auto] gap-2" @submit.prevent="emit('join', { code: joinCode, name: joinName })">
           <input v-model="joinCode" class="field uppercase" maxlength="6" placeholder="Code" aria-label="Game code" />
           <input v-model="joinName" class="field" placeholder="Your name" aria-label="Player name" />
-          <button type="submit" class="button-secondary px-3" aria-label="Join game"><Users class="h-4 w-4" /></button>
+          <button type="submit" class="button-secondary px-3" aria-label="Join game" :disabled="busy"><Users class="h-4 w-4" /></button>
         </form>
         <p v-if="joinError" class="mt-2 px-1 text-xs text-ember">{{ joinError }}</p>
-        <p class="mt-2 text-[11px] leading-4 text-fog/60">In this prototype, use the player-view switch after creating a local session.</p>
+        <p class="mt-2 text-[11px] leading-4 text-fog/60">Players can join from another device with the game code and their name.</p>
       </div>
     </section>
   </main>

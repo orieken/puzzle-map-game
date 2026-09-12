@@ -1,18 +1,40 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { ChevronDown, Clipboard, Dices, LogOut, MonitorCog, UserRound } from 'lucide-vue-next'
+import { ChevronDown, Clipboard, Dices, LoaderCircle, LogOut, MonitorCog, UserRound } from 'lucide-vue-next'
 import DmDashboard from './components/DmDashboard.vue'
 import PlayerView from './components/PlayerView.vue'
 import SetupView from './components/SetupView.vue'
 import { canMove, generateMaze, isPerimeter, movePosition, perimeterCells, shortestPath } from './game/maze'
+import { ensureAnonymousUser, firebaseConfigured } from './services/firebase'
+import {
+  clearRemoteRequests,
+  createRemoteGame,
+  joinRemoteGame,
+  loadRemoteDmGame,
+  requestRemoteAction,
+  saveRemoteGame,
+  setRemoteConnection,
+  submitRemoteRoll,
+  subscribeToPlayerRequests,
+  subscribeToPlayerView,
+} from './services/gameRepository'
 
 const STORAGE_KEY = 'maze-of-whispers-session-v1'
+const PLAYER_CONNECTION_KEY = 'maze-of-whispers-player-connection-v1'
 const view = ref('setup')
 const role = ref('dm')
 const viewedPlayerId = ref(null)
 const copied = ref(false)
 const joinError = ref('')
+const busy = ref(false)
+const clientMode = ref('local')
+const remoteGameId = ref(null)
+const remoteUid = ref(null)
 const session = reactive({})
+let unsubscribeRequests = null
+let unsubscribePlayerView = null
+let saveTimer = null
+let processingRequests = false
 
 const defaultDiscoveries = [
   { id: 'writing', title: 'The Warning', text: 'Three lines are carved into the mortar: IT HEARS THE LIVING.', type: 'message', dc: 3 },
@@ -61,32 +83,116 @@ function placeDiscoveries(maze, discoveries) {
   })
 }
 
-function createSession({ dmName, partyNames }) {
+function nextAvailableSpawn() {
+  const used = new Set((session.players || []).map((player) => `${player.position.row}:${player.position.col}`))
+  return shuffle(perimeterCells(session.size || 12)).find((position) => !used.has(`${position.row}:${position.col}`)) || { row: 0, col: 0 }
+}
+
+function makePlayer(name, position, { starter = false, connected = false } = {}) {
+  return {
+    id: uid('player'),
+    name,
+    position: { ...position },
+    facing: null,
+    status: 'alive',
+    connected,
+    pendingRoll: null,
+    actionUsed: false,
+    explored: [`${position.row}:${position.col}`],
+    inventory: starter ? [{ ...defaultDiscoveries.find((item) => item.id === 'torch'), id: uid('starter-torch') }] : [],
+    found: [],
+    vision: 1,
+    movement: 1,
+    atExit: false,
+  }
+}
+
+function attachPlayerView(gameId, playerUid) {
+  unsubscribePlayerView?.()
+  unsubscribePlayerView = subscribeToPlayerView(gameId, playerUid, (remoteSession) => {
+    Object.keys(session).forEach((key) => delete session[key])
+    Object.assign(session, remoteSession)
+    viewedPlayerId.value = remoteSession.players?.[0]?.id || null
+    role.value = 'player'
+    view.value = 'game'
+  }, (error) => {
+    joinError.value = `The player view could not connect: ${error.message}`
+    view.value = 'setup'
+  })
+}
+
+async function processPlayerRequests(records) {
+  if (processingRequests || clientMode.value !== 'dm' || !session.gameId) return
+  processingRequests = true
+  try {
+    for (const record of records) {
+      let player = session.players.find((candidate) => candidate.remoteUid === record.uid)
+
+      if (!player && record.status === 'joining') {
+        player = session.players.find(
+          (candidate) => !candidate.remoteUid && candidate.name.toLowerCase() === String(record.name || '').toLowerCase(),
+        )
+        if (!player) {
+          player = makePlayer(record.name || 'Wanderer', nextAvailableSpawn(), { connected: true })
+          session.players.push(player)
+        }
+        player.remoteUid = record.uid
+        player.connected = true
+        addLog(`${player.name} joined the game from another device.`)
+      }
+
+      if (!player) continue
+      if (player.connected !== (record.connected !== false)) player.connected = record.connected !== false
+
+      const remoteRoll = record.pendingRoll
+      if (remoteRoll?.id && player.pendingRoll?.requestId !== remoteRoll.id) {
+        submitRoll({ playerId: player.id, type: remoteRoll.type, value: remoteRoll.value })
+        if (player.pendingRoll) player.pendingRoll.requestId = remoteRoll.id
+      }
+
+      const action = record.pendingAction
+      if (action?.id && player.lastProcessedActionId !== action.id) {
+        player.lastProcessedActionId = action.id
+        if (action.type === 'move') movePlayer({ playerId: player.id, direction: action.direction })
+        if (action.type === 'use-item') useItem({ playerId: player.id, itemId: action.itemId })
+        await clearRemoteRequests(session.gameId, record.uid, ['pendingAction'])
+      }
+    }
+  } finally {
+    processingRequests = false
+  }
+}
+
+function attachDmRequests(gameId) {
+  unsubscribeRequests?.()
+  unsubscribeRequests = subscribeToPlayerRequests(gameId, processPlayerRequests, (error) => {
+    joinError.value = `Realtime player updates stopped: ${error.message}`
+  })
+}
+
+function scheduleRemoteSave() {
+  if (clientMode.value !== 'dm' || !session.gameId) return
+  window.clearTimeout(saveTimer)
+  saveTimer = window.setTimeout(() => {
+    saveRemoteGame(session).catch((error) => {
+      joinError.value = `The game could not be synchronized: ${error.message}`
+    })
+  }, 180)
+}
+
+async function createSession({ dmName, partyNames }) {
+  busy.value = true
+  joinError.value = ''
   const size = 12
   const maze = generateMaze(size)
   const spawns = shuffle(perimeterCells(size))
   const discoveries = defaultDiscoveries.map((discovery) => ({ ...discovery }))
   placeDiscoveries(maze, discoveries)
 
-  const players = partyNames.map((name, index) => {
-    const position = spawns[index % spawns.length]
-    return {
-      id: uid('player'),
-      name,
-      position: { ...position },
-      facing: null,
-      status: 'alive',
-      connected: true,
-      pendingRoll: null,
-      actionUsed: false,
-      explored: [`${position.row}:${position.col}`],
-      inventory: index === 0 ? [{ ...defaultDiscoveries.find((item) => item.id === 'torch'), id: uid('starter-torch') }] : [],
-      found: [],
-      vision: 1,
-      movement: 1,
-      atExit: false,
-    }
-  })
+  const players = partyNames.map((name, index) => makePlayer(name, spawns[index % spawns.length], {
+    starter: index === 0,
+    connected: !firebaseConfigured,
+  }))
 
   Object.assign(session, {
     id: uid('session'),
@@ -109,12 +215,32 @@ function createSession({ dmName, partyNames }) {
     log: [{ id: uid('log'), message: 'The maze has taken shape. The party waits at its edges.', round: 1 }],
   })
 
+  if (firebaseConfigured) {
+    try {
+      const remote = await createRemoteGame(session)
+      session.gameId = remote.gameId
+      session.dmUid = remote.dmUid
+      remoteGameId.value = remote.gameId
+      clientMode.value = 'dm'
+      attachDmRequests(remote.gameId)
+      await saveRemoteGame(session)
+    } catch (error) {
+      joinError.value = `Firebase could not create the game: ${error.message}`
+      view.value = 'setup'
+      busy.value = false
+      return
+    }
+  } else {
+    clientMode.value = 'local'
+  }
+
   viewedPlayerId.value = players[0]?.id
   role.value = 'dm'
   view.value = 'game'
+  busy.value = false
 }
 
-function joinSession({ code, name }) {
+async function joinSession({ code, name }) {
   joinError.value = ''
   const normalizedCode = code.trim().toUpperCase()
   const normalizedName = name.trim()
@@ -122,6 +248,27 @@ function joinSession({ code, name }) {
     joinError.value = 'Enter both the game code and your name.'
     return
   }
+
+  if (firebaseConfigured) {
+    busy.value = true
+    try {
+      const connection = await joinRemoteGame(normalizedCode, normalizedName)
+      clientMode.value = 'player'
+      remoteGameId.value = connection.gameId
+      remoteUid.value = connection.uid
+      role.value = 'player'
+      view.value = 'waiting'
+      localStorage.setItem(PLAYER_CONNECTION_KEY, JSON.stringify(connection))
+      attachPlayerView(connection.gameId, connection.uid)
+    } catch (error) {
+      joinError.value = error.message || 'The game could not be joined.'
+      view.value = 'setup'
+    } finally {
+      busy.value = false
+    }
+    return
+  }
+
   if (!session.id || session.code !== normalizedCode) {
     joinError.value = 'That session is not saved in this browser.'
     return
@@ -129,24 +276,7 @@ function joinSession({ code, name }) {
 
   let player = session.players.find((candidate) => candidate.name.toLowerCase() === normalizedName.toLowerCase())
   if (!player) {
-    const used = new Set(session.players.map((candidate) => `${candidate.position.row}:${candidate.position.col}`))
-    const spawn = shuffle(perimeterCells(session.size)).find((position) => !used.has(`${position.row}:${position.col}`)) || { row: 0, col: 0 }
-    player = {
-      id: uid('player'),
-      name: normalizedName,
-      position: { ...spawn },
-      facing: null,
-      status: 'alive',
-      connected: true,
-      pendingRoll: null,
-      actionUsed: false,
-      explored: [`${spawn.row}:${spawn.col}`],
-      inventory: [],
-      found: [],
-      vision: 1,
-      movement: 1,
-      atExit: false,
-    }
+    player = makePlayer(normalizedName, nextAvailableSpawn(), { connected: true })
     session.players.push(player)
     addLog(`${player.name} joined the expedition.`)
   } else {
@@ -259,6 +389,9 @@ function approveRoll(playerId) {
   if (!player?.pendingRoll) return
   const roll = { ...player.pendingRoll }
   player.pendingRoll = null
+  if (player.remoteUid && session.gameId) {
+    void clearRemoteRequests(session.gameId, player.remoteUid, ['pendingRoll'])
+  }
 
   if (roll.type === 'search') {
     const finds = session.discoveries.filter(
@@ -291,6 +424,9 @@ function rejectRoll(playerId) {
   if (!player?.pendingRoll) return
   addLog(`The DM rejected ${player.name}'s submitted roll.`)
   player.pendingRoll = null
+  if (player.remoteUid && session.gameId) {
+    void clearRemoteRequests(session.gameId, player.remoteUid, ['pendingRoll'])
+  }
 }
 
 function setStatus({ playerId, status }) {
@@ -357,6 +493,57 @@ function regenerateMaze() {
   addLog('The DM reshaped the maze before the expedition began.')
 }
 
+async function handleMove(payload) {
+  if (clientMode.value !== 'player') {
+    movePlayer(payload)
+    return
+  }
+  try {
+    await requestRemoteAction(remoteGameId.value, {
+      id: uid('action'),
+      type: 'move',
+      direction: payload.direction,
+    })
+    const player = session.players.find((candidate) => candidate.id === payload.playerId)
+    if (player) player.actionUsed = true
+  } catch (error) {
+    joinError.value = `Your move was not sent: ${error.message}`
+  }
+}
+
+async function handleSubmitRoll(payload) {
+  if (clientMode.value !== 'player') {
+    submitRoll(payload)
+    return
+  }
+  const request = { id: uid('roll'), type: payload.type, value: payload.value }
+  try {
+    await submitRemoteRoll(remoteGameId.value, request)
+    const player = session.players.find((candidate) => candidate.id === payload.playerId)
+    if (player) player.pendingRoll = { ...request, requestId: request.id }
+  } catch (error) {
+    joinError.value = `Your roll was not sent: ${error.message}`
+  }
+}
+
+async function handleUseItem(payload) {
+  if (clientMode.value !== 'player') {
+    useItem(payload)
+    return
+  }
+  try {
+    await requestRemoteAction(remoteGameId.value, {
+      id: uid('action'),
+      type: 'use-item',
+      itemId: payload.itemId,
+    })
+    const player = session.players.find((candidate) => candidate.id === payload.playerId)
+    if (player) player.actionUsed = true
+  } catch (error) {
+    joinError.value = `The item request was not sent: ${error.message}`
+  }
+}
+
 async function copyCode() {
   try {
     await navigator.clipboard.writeText(session.code)
@@ -367,20 +554,73 @@ async function copyCode() {
   }
 }
 
-function leaveSession() {
+async function leaveSession() {
+  if (clientMode.value === 'player' && remoteGameId.value) {
+    try {
+      await setRemoteConnection(remoteGameId.value, false)
+    } catch {
+      // The player can still leave locally if the network is unavailable.
+    }
+    unsubscribePlayerView?.()
+    unsubscribePlayerView = null
+    localStorage.removeItem(PLAYER_CONNECTION_KEY)
+  }
+  if (clientMode.value === 'dm') {
+    unsubscribeRequests?.()
+    unsubscribeRequests = null
+  }
   view.value = 'setup'
   role.value = 'dm'
+  clientMode.value = 'local'
 }
 
 watch(session, (value) => {
-  if (value.id) localStorage.setItem(STORAGE_KEY, JSON.stringify(value))
+  if (value.id && clientMode.value !== 'player') {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(value))
+    scheduleRemoteSave()
+  }
 }, { deep: true })
 
-onMounted(() => {
+onMounted(async () => {
+  if (firebaseConfigured) {
+    const savedConnection = localStorage.getItem(PLAYER_CONNECTION_KEY)
+    if (savedConnection) {
+      try {
+        const connection = JSON.parse(savedConnection)
+        const user = await ensureAnonymousUser()
+        if (connection.uid === user.uid) {
+          clientMode.value = 'player'
+          remoteGameId.value = connection.gameId
+          remoteUid.value = connection.uid
+          role.value = 'player'
+          view.value = 'waiting'
+          await setRemoteConnection(connection.gameId, true)
+          attachPlayerView(connection.gameId, connection.uid)
+          return
+        }
+      } catch {
+        localStorage.removeItem(PLAYER_CONNECTION_KEY)
+      }
+    }
+  }
+
   const saved = localStorage.getItem(STORAGE_KEY)
   if (!saved) return
   try {
-    Object.assign(session, JSON.parse(saved))
+    let restored = JSON.parse(saved)
+    if (firebaseConfigured && restored.gameId) {
+      try {
+        const remoteSession = await loadRemoteDmGame(restored.gameId)
+        if (remoteSession) restored = remoteSession
+        clientMode.value = 'dm'
+        remoteGameId.value = restored.gameId
+        attachDmRequests(restored.gameId)
+      } catch (error) {
+        joinError.value = `Using the last local copy; Firebase reconnect failed: ${error.message}`
+        clientMode.value = 'local'
+      }
+    }
+    Object.assign(session, restored)
     viewedPlayerId.value = session.players?.[0]?.id
     view.value = 'game'
   } catch {
@@ -391,7 +631,17 @@ onMounted(() => {
 
 <template>
   <div class="grain min-h-screen">
-    <SetupView v-if="view === 'setup'" :join-error="joinError" @create="createSession" @join="joinSession" />
+    <SetupView v-if="view === 'setup'" :join-error="joinError" :busy="busy" @create="createSession" @join="joinSession" />
+
+    <main v-else-if="view === 'waiting'" class="flex min-h-screen items-center justify-center px-5 text-center">
+      <section class="panel w-full max-w-md p-8">
+        <LoaderCircle class="mx-auto h-8 w-8 animate-spin text-acid" />
+        <p class="eyebrow mt-5">Game {{ remoteGameId ? 'found' : 'connecting' }}</p>
+        <h1 class="mt-2 font-display text-3xl text-bone">Waiting for the Dungeon Master</h1>
+        <p class="mt-3 text-sm leading-6 text-fog">Your name has been sent to the game. Keep this page open while the DM admits you to the maze.</p>
+        <button type="button" class="button-secondary mt-6 w-full" @click="leaveSession">Cancel</button>
+      </section>
+    </main>
 
     <template v-else>
       <header class="sticky top-0 z-40 mb-5 border-b border-white/10 bg-ink/90 backdrop-blur-xl">
@@ -403,13 +653,13 @@ onMounted(() => {
 
           <div class="ml-auto flex items-center gap-2">
             <button type="button" class="hidden items-center gap-2 border border-white/10 bg-white/[0.03] px-3 py-2 font-mono text-[10px] uppercase tracking-wider text-fog transition hover:border-white/20 sm:flex" @click="copyCode">
-              <span>{{ copied ? 'Copied' : 'Game' }}</span>
+              <span>{{ copied ? 'Copied' : clientMode === 'local' ? 'Game' : 'Live game' }}</span>
               <strong class="tracking-[0.22em] text-bone">{{ session.code }}</strong>
               <Clipboard class="h-3 w-3" />
             </button>
 
             <div class="flex rounded-sm border border-white/10 bg-coal p-1">
-              <button type="button" class="flex min-h-8 items-center gap-1.5 px-2.5 text-xs font-semibold transition" :class="role === 'dm' ? 'bg-acid text-ink' : 'text-fog hover:text-bone'" @click="role = 'dm'">
+              <button v-if="clientMode !== 'player'" type="button" class="flex min-h-8 items-center gap-1.5 px-2.5 text-xs font-semibold transition" :class="role === 'dm' ? 'bg-acid text-ink' : 'text-fog hover:text-bone'" @click="role = 'dm'">
                 <MonitorCog class="h-3.5 w-3.5" /> <span class="hidden sm:inline">DM</span>
               </button>
               <button type="button" class="flex min-h-8 items-center gap-1.5 px-2.5 text-xs font-semibold transition" :class="role === 'player' ? 'bg-acid text-ink' : 'text-fog hover:text-bone'" @click="role = 'player'">
@@ -417,7 +667,7 @@ onMounted(() => {
               </button>
             </div>
 
-            <label v-if="role === 'player'" class="relative hidden sm:block">
+            <label v-if="role === 'player' && clientMode !== 'player'" class="relative hidden sm:block">
               <select v-model="viewedPlayerId" class="field min-h-10 appearance-none !py-2 !pl-3 !pr-8 text-xs">
                 <option v-for="player in session.players" :key="player.id" :value="player.id">{{ player.name }}</option>
               </select>
@@ -428,12 +678,17 @@ onMounted(() => {
           </div>
         </div>
 
-        <div v-if="role === 'player'" class="border-t border-white/5 px-4 py-2 sm:hidden">
+        <div v-if="role === 'player' && clientMode !== 'player'" class="border-t border-white/5 px-4 py-2 sm:hidden">
           <select v-model="viewedPlayerId" class="field !py-2 text-xs">
             <option v-for="player in session.players" :key="player.id" :value="player.id">Viewing as {{ player.name }}</option>
           </select>
         </div>
       </header>
+
+      <div v-if="joinError" class="mx-auto mb-5 flex w-[calc(100%-2rem)] max-w-[1640px] items-center justify-between gap-4 border border-ember/30 bg-ember/10 px-4 py-3 text-sm text-[#ef9a76]">
+        <span>{{ joinError }}</span>
+        <button type="button" class="text-xs font-semibold uppercase tracking-wider" @click="joinError = ''">Dismiss</button>
+      </div>
 
       <div v-if="session.status === 'complete'" class="mx-auto mb-5 w-[calc(100%-2rem)] max-w-[1640px] border border-acid/30 bg-acid/10 p-4 text-center shadow-acid">
         <p class="eyebrow">The center opens</p>
@@ -457,9 +712,9 @@ onMounted(() => {
         v-else-if="viewedPlayer"
         :session="session"
         :player="viewedPlayer"
-        @move="movePlayer"
-        @submit-roll="submitRoll"
-        @use-item="useItem"
+        @move="handleMove"
+        @submit-roll="handleSubmitRoll"
+        @use-item="handleUseItem"
       />
     </template>
   </div>

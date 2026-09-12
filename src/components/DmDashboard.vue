@@ -222,9 +222,9 @@ function playerAtSelected() {
                 >{{ player.name.slice(0, 1) }}</span>
                 <span class="min-w-0 flex-1">
                   <span class="block truncate text-sm font-semibold">{{ player.name }}</span>
-                  <span class="block text-[11px]">{{ player.status }} · {{ player.inventory.length }} items</span>
+                  <span class="block text-[11px]">{{ player.status }} · {{ player.inventory.length }} items · {{ player.connected ? 'connected' : 'waiting to join' }}</span>
                 </span>
-                <span class="h-2 w-2 rounded-full" :class="player.status === 'alive' ? 'bg-acid' : 'bg-fog'" />
+                <span class="h-2 w-2 rounded-full" :class="player.connected ? 'bg-acid' : 'bg-fog/40'" />
               </button>
               <div class="mt-2 flex gap-2 pl-11">
                 <button

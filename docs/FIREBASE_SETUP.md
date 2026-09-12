@@ -1,6 +1,6 @@
 # Firebase and Firestore Setup
 
-This guide prepares Firebase as the realtime backend for Maze of Whispers. The Vue application does not use Firebase yet; completing these steps creates the services and configuration needed for the multiplayer integration.
+This guide configures the Firebase realtime backend used by Maze of Whispers. The Vue application automatically enables multiplayer when all six Firebase environment variables are present.
 
 ## What Firebase will provide
 
@@ -55,7 +55,7 @@ From the repository root, install the browser SDK:
 npm install firebase
 ```
 
-The multiplayer implementation will initialize `firebase/app`, `firebase/auth`, and `firebase/firestore` from a small service module.
+The application initializes `firebase/app`, `firebase/auth`, and `firebase/firestore` from `src/services/firebase.js`.
 
 ## 6. Configure local environment variables
 
@@ -68,6 +68,7 @@ VITE_FIREBASE_PROJECT_ID=your-project-id
 VITE_FIREBASE_STORAGE_BUCKET=your-project.firebasestorage.app
 VITE_FIREBASE_MESSAGING_SENDER_ID=your-sender-id
 VITE_FIREBASE_APP_ID=your-app-id
+VITE_FIREBASE_USE_EMULATOR=false
 ```
 
 Copy each value from **Project settings → General → Your apps → SDK setup and configuration**. Restart the Vite development server after changing environment variables.
@@ -100,39 +101,30 @@ games/{gameId}
   updatedAt
 
 games/{gameId}/private/state
-  maze
-  exit
-  abomination
-  noises
-  discoveries
+  sessionJson        # complete authoritative game state, DM-only
+  updatedAt
 
 games/{gameId}/players/{uid}
   uid
   name
-  position
-  facing
   status
-  inventory
-  explored
+  playerId
+  position
   pendingAction
   pendingRoll
   connected
+  createdAt
   lastSeen
+  updatedAt
 
 games/{gameId}/views/{uid}
-  currentRoom
-  visibleExits
-  sightline
-  visiblePlayers
-  threatWarning
-  revealedDiscoveries
-
-games/{gameId}/publicEvents/{eventId}
+  sessionJson        # individualized, sanitized player state
+  updatedAt
 ```
 
 The short game code maps to an unguessable Firestore game ID. A player first reads the exact `gameCodes/{CODE}` document, then creates their own restricted player document under the matching game.
 
-Keep secret state in `games/{gameId}/private/state`, which only the DM can read. Each player's `views/{uid}` document contains only the information that player is allowed to see. Do not rely on the Vue interface to hide data: if a browser can read a Firestore document, the player can inspect its complete contents with developer tools.
+Keep secret state in `games/{gameId}/private/state`, which only the DM can read. It is serialized as `sessionJson` because Firestore does not accept the maze's nested arrays as native values. Each player's `views/{uid}` document contains a serialized, sanitized game snapshot with only the information that player is allowed to see. Do not rely on the Vue interface to hide data: if a browser can read a Firestore document, the player can inspect its complete contents with developer tools.
 
 ## 9. Start with restrictive Security Rules
 
@@ -146,86 +138,9 @@ The intended permission model is:
 - Players can read only their own player and sanitized view documents; hidden maze and threat state remain DM-only.
 - Game-code collection queries are forbidden; clients may only retrieve an exact code.
 
-The following is a starting ruleset for the planned schema. Review and test it with the Firebase Emulator before production use.
+The implemented rules are stored in [`firestore.rules`](../firestore.rules). Treat that committed file as the authoritative ruleset; keeping a second copy in this guide would make it easy for the two versions to drift. The rules validate join records and player names, prevent game-code collection queries, keep the full state DM-only, and allow each player to read only their own player and view documents.
 
-```text
-rules_version = '2';
-
-service cloud.firestore {
-  match /databases/{database}/documents {
-    function signedIn() {
-      return request.auth != null;
-    }
-
-    function isDm(gameId) {
-      return signedIn()
-        && get(/databases/$(database)/documents/games/$(gameId)).data.dmUid == request.auth.uid;
-    }
-
-    function isMember(gameId) {
-      return signedIn()
-        && exists(/databases/$(database)/documents/games/$(gameId)/players/$(request.auth.uid));
-    }
-
-    match /gameCodes/{code} {
-      allow get: if signedIn();
-      allow list: if false;
-      allow create: if signedIn()
-        && request.resource.data.dmUid == request.auth.uid;
-      allow update, delete: if signedIn()
-        && resource.data.dmUid == request.auth.uid;
-    }
-
-    match /games/{gameId} {
-      allow create: if signedIn()
-        && request.resource.data.dmUid == request.auth.uid;
-      allow read: if isDm(gameId) || isMember(gameId);
-      allow update, delete: if isDm(gameId);
-
-      match /players/{playerId} {
-        allow read: if isDm(gameId)
-          || (signedIn() && playerId == request.auth.uid);
-        allow create: if signedIn()
-          && playerId == request.auth.uid
-          && request.resource.data.uid == request.auth.uid
-          && request.resource.data.keys().hasOnly([
-            'uid', 'name', 'status', 'position', 'pendingAction',
-            'pendingRoll', 'connected', 'createdAt'
-          ])
-          && request.resource.data.status == 'joining'
-          && request.resource.data.position == null
-          && request.resource.data.pendingAction == null
-          && request.resource.data.pendingRoll == null
-          && request.resource.data.connected == true;
-        allow update: if isDm(gameId)
-          || (signedIn()
-            && playerId == request.auth.uid
-            && request.resource.data.diff(resource.data).affectedKeys()
-              .hasOnly(['name', 'pendingAction', 'pendingRoll', 'connected', 'lastSeen']));
-        allow delete: if isDm(gameId)
-          || (signedIn() && playerId == request.auth.uid);
-      }
-
-      match /private/{documentId} {
-        allow read, write: if isDm(gameId);
-      }
-
-      match /views/{playerId} {
-        allow read: if isDm(gameId)
-          || (signedIn() && playerId == request.auth.uid);
-        allow write: if isDm(gameId);
-      }
-
-      match /publicEvents/{eventId} {
-        allow read: if isDm(gameId) || isMember(gameId);
-        allow write: if isDm(gameId);
-      }
-    }
-  }
-}
-```
-
-Keep rules in source control once the Firebase CLI is initialized. Firebase recommends using Authentication and Firestore Security Rules together for web clients. See [secure Firestore data](https://firebase.google.com/docs/firestore/security/overview) and [test Security Rules](https://firebase.google.com/docs/rules/unit-tests).
+Review and test the rules with the Firebase Emulator before production use. Firebase recommends using Authentication and Firestore Security Rules together for web clients. See [secure Firestore data](https://firebase.google.com/docs/firestore/security/overview) and [test Security Rules](https://firebase.google.com/docs/rules/unit-tests).
 
 ## 10. Initialize and test with the Firebase CLI
 
@@ -233,21 +148,30 @@ From the repository root:
 
 ```bash
 npx firebase-tools login
-npx firebase-tools init firestore
+npx firebase-tools use --add
 ```
 
-During initialization:
+During project selection:
 
 1. Select the Firebase project created above.
-2. Accept `firestore.rules` as the rules filename.
-3. Accept `firestore.indexes.json` as the indexes filename.
-4. Copy the reviewed ruleset into `firestore.rules`.
+2. Choose an alias such as `default`.
+3. Keep the committed `firebase.json`, `firestore.rules`, and `firestore.indexes.json` files; do not overwrite them with generated starter files.
 
 Run the local Firestore emulator while developing:
+
+Start the emulators in one terminal:
 
 ```bash
 npx firebase-tools emulators:start --only firestore,auth
 ```
+
+Then start the application in another terminal:
+
+```bash
+VITE_FIREBASE_USE_EMULATOR=true npm run dev
+```
+
+The development server connects to Auth on port `9099` and Firestore on port `8080` when the emulator variable is enabled.
 
 Deploy rules only after emulator tests pass:
 
@@ -255,18 +179,18 @@ Deploy rules only after emulator tests pass:
 npx firebase-tools deploy --only firestore:rules,firestore:indexes
 ```
 
-## Multiplayer integration checklist
+## Implemented multiplayer flow
 
 - Initialize Firebase from the six Vite environment variables.
 - Sign every visitor in anonymously before reading or writing session data.
-- Create the game and its short-code mapping in one transaction or batch.
+- Create the game, private state, and short-code mapping in one atomic batch.
 - Subscribe the DM and players with Firestore realtime listeners.
 - Store hidden maze, discovery, noise, and abomination state in DM-only documents.
 - Store a sanitized, individualized view for each player.
 - Store player requests separately from DM-authoritative state changes.
-- Use transactions for joining, turn advancement, and conflict-prone updates.
+- Let the DM remain authoritative: player documents carry requests and the DM applies accepted changes to game state.
 - Unsubscribe listeners when leaving a session.
-- Test reconnecting, duplicate names, invalid codes, deleted games, and simultaneous actions.
-- Test all Security Rules in the emulator before deploying them.
+- Player connections are saved in local browser storage and reconnect to their own sanitized view after a refresh.
+- The core create, join, admission, begin-turn, and move flow has been exercised against the Auth and Firestore emulators with the committed rules.
 
-Firestore transactions retry when another client changes a document that was read during the transaction, making them appropriate for turn and join coordination. See [Firestore transactions](https://firebase.google.com/docs/firestore/manage-data/transactions).
+Before a wider release, add automated emulator coverage for duplicate names, invalid codes, deleted games, simultaneous actions, reconnect edge cases, and all Security Rules.

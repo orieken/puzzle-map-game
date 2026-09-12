@@ -1,0 +1,82 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isDm(gameId) {
+      return signedIn()
+        && getAfter(/databases/$(database)/documents/games/$(gameId)).data.dmUid == request.auth.uid;
+    }
+
+    function isMember(gameId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/games/$(gameId)/players/$(request.auth.uid));
+    }
+
+    match /gameCodes/{code} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn()
+        && request.resource.data.dmUid == request.auth.uid;
+      allow update, delete: if signedIn()
+        && resource.data.dmUid == request.auth.uid;
+    }
+
+    match /games/{gameId} {
+      allow create: if signedIn()
+        && request.resource.data.dmUid == request.auth.uid;
+      allow read: if isDm(gameId) || isMember(gameId);
+      allow update, delete: if isDm(gameId);
+
+      match /players/{playerId} {
+        allow read: if isDm(gameId)
+          || (signedIn() && playerId == request.auth.uid);
+        allow create: if signedIn()
+          && playerId == request.auth.uid
+          && get(/databases/$(database)/documents/games/$(gameId)).data.status in ['lobby', 'active']
+          && request.resource.data.keys().hasOnly([
+            'uid', 'name', 'status', 'position', 'pendingAction',
+            'pendingRoll', 'connected', 'createdAt'
+          ])
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.name is string
+          && request.resource.data.name.size() >= 1
+          && request.resource.data.name.size() <= 40
+          && request.resource.data.status == 'joining'
+          && request.resource.data.position == null
+          && request.resource.data.pendingAction == null
+          && request.resource.data.pendingRoll == null
+          && request.resource.data.connected == true
+          && request.resource.data.createdAt == request.time;
+        allow update: if isDm(gameId)
+          || (signedIn()
+            && playerId == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['name', 'pendingAction', 'pendingRoll', 'connected', 'lastSeen'])
+            && request.resource.data.name is string
+            && request.resource.data.name.size() >= 1
+            && request.resource.data.name.size() <= 40);
+        allow delete: if isDm(gameId)
+          || (signedIn() && playerId == request.auth.uid);
+      }
+
+      match /private/{documentId} {
+        allow read, write: if isDm(gameId);
+      }
+
+      match /views/{playerId} {
+        allow read: if isDm(gameId)
+          || (signedIn() && playerId == request.auth.uid);
+        allow write: if isDm(gameId);
+      }
+
+      match /publicEvents/{eventId} {
+        allow read: if isDm(gameId) || isMember(gameId);
+        allow write: if isDm(gameId);
+      }
+    }
+  }
+}

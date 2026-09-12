@@ -2,6 +2,20 @@
 
 A Vue 3 and Tailwind tabletop companion for a Dungeon Master running a shared, turn-based maze expedition.
 
+## Play online
+
+[Launch Maze of Whispers](https://incandescent-puppy-119c84.netlify.app/)
+
+## Screenshots
+
+### Create an expedition
+
+![Maze of Whispers expedition setup](./docs/images/maze-of-whispers-setup.png)
+
+### Dungeon Master dashboard
+
+![Maze of Whispers Dungeon Master dashboard](./docs/images/maze-of-whispers-dm-dashboard.png)
+
 ## Current prototype
 
 The browser prototype includes:

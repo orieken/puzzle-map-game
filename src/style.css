@@ -1,0 +1,81 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    background: #090a0b;
+  }
+
+  body {
+    margin: 0;
+    min-width: 320px;
+    min-height: 100vh;
+    color: #d8d2c4;
+    background:
+      radial-gradient(circle at 15% 0%, rgba(184, 204, 92, 0.06), transparent 27rem),
+      radial-gradient(circle at 85% 15%, rgba(217, 107, 59, 0.05), transparent 30rem),
+      #090a0b;
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+
+  button {
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply border border-white/10 bg-coal/90 shadow-2xl backdrop-blur-sm;
+  }
+
+  .eyebrow {
+    @apply font-mono text-[10px] font-semibold uppercase tracking-[0.24em] text-acid/70;
+  }
+
+  .button-primary {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-sm bg-acid px-5 py-2.5 text-sm font-bold text-ink transition hover:bg-[#cadc70] disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .button-secondary {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-sm border border-white/15 bg-white/[0.04] px-4 py-2.5 text-sm font-semibold text-bone transition hover:border-white/25 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-35;
+  }
+
+  .button-danger {
+    @apply inline-flex min-h-10 items-center justify-center gap-2 rounded-sm border border-ember/30 bg-ember/10 px-4 py-2 text-sm font-semibold text-[#ef9a76] transition hover:bg-ember/20 disabled:opacity-35;
+  }
+
+  .field {
+    @apply w-full rounded-sm border border-white/10 bg-ink/70 px-3 py-2.5 text-sm text-bone outline-none transition placeholder:text-fog/50 focus:border-acid/50 focus:ring-2 focus:ring-acid/10;
+  }
+
+  .stat-card {
+    @apply rounded-sm border border-white/10 bg-ink/50 p-3;
+  }
+}
+
+.grain::before {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+  opacity: 0.035;
+  content: '';
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.7'/%3E%3C/svg%3E");
+}
+
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+}

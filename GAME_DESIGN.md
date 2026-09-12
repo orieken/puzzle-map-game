@@ -99,8 +99,8 @@ sequenceDiagram
   - Move one connected room
   - Search the current room
   - Use an item
-  - Create a deliberate ruckus, if the DM allows it
-- Item effects may later grant extra movement, extended vision, a distraction, healing, or other DM-defined effects.
+  - Create a deliberate ruckus (requires a physical-roll action, treating it like a search or skill check)
+- The initial release will feature a fixed starter set of built-in items (e.g., Torch, Health Potion, Decoy). Later phases may add extra movement, extended vision, or other DM-defined effects.
 
 ## Noise and the Abomination
 
@@ -120,10 +120,11 @@ flowchart LR
 ```
 
 - Moving through a perimeter room has a chance to trigger ghost noise from the exterior lattice.
-- Noise has at least a location and loudness. The abomination pursues the loudest active noise, enabling players to deliberately distract it.
+- Noise has at least a location and loudness. Noise fades slightly each turn (decaying over time) until it disappears.
+- The abomination moves 1 room per player turn, right after the player's action if there is active noise, pursuing the loudest active noise. This enables players to deliberately distract it.
+- As the abomination moves, players receive proximity warnings (a noise indicator) revealing how close it is and from what direction it approaches, building tension as it closes in.
 - Reaching a player creates a DM-led encounter rather than an automatic game-over. The app pauses or clearly flags the player's normal action state until the DM resolves the encounter.
 - The DM can mark players alive, dead, or restored. Dead players remain on the map and can be found by teammates.
-- Detailed deliberate-ruckus rules and noise duration/decay remain design decisions to finalize before implementation.
 
 ## Searching and Discoveries
 
@@ -157,6 +158,7 @@ The session completes successfully only when every player is alive and reaches t
 - Optional discovered-map view, when enabled by the DM
 - Action controls and physical-roll submission
 - Inventory and temporary effects
+- Proximity/Noise indicator providing a sense of distance and direction to the abomination
 - Clear indicators for encounters, death, and waiting for DM approval
 
 ## Persistence and Safety of State
@@ -197,9 +199,3 @@ The session completes successfully only when every player is alive and reaches t
 - Generated room descriptions
 - Campaign templates and reusable discovery libraries
 - Expanded item-effect system and configurable action counts
-
-## Remaining Rule Decisions
-
-1. How deliberate ruckus works: physical-roll action, item-only ability, or DM-only action.
-2. Whether noise remains active for a fixed duration, fades each turn, or expires when reached by the abomination.
-3. Whether the first release uses generic item effects or a fixed starter set of built-in item types.
